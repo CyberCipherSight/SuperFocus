@@ -1,0 +1,3 @@
+<resources>
+    <string name="accessibility_description_play">Detects which app opens and applies the limits and focus rules you choose. FocusBro does not read screen content or send data off your device.</string>
+</resources>

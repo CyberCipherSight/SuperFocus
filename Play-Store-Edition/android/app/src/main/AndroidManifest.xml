@@ -1,0 +1,289 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- Keeps the countdown accurate while the screen is off. The OS holds the
+         lock itself, so losing this service delays the session ending; it never
+         unlocks the phone. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- A reboot must not end a session early. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Ends the session on time even in doze. USE_EXACT_ALARM is the
+         timer/alarm-app grant on API 33+; below that the older one applies. -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- Keeps the countdown from stalling under aggressive OEM battery managers. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Notification fallback for timetable starts on non-owner devices.
+         Native session activation does not depend on notification delivery. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Only used on devices without device owner. Holding this is a documented
+         exemption from the API 29 background-activity-launch block, which is how
+         a routine starts a session under the screen-pinning fallback. FocusBro
+         draws no overlays. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Durations only, for the focus charts. Never content. -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32" />
+    <!-- Turns Bluetooth on during a session so paired headphones can
+         reconnect without reaching Settings or the status bar, both of which
+         are walled off under lock task. BLUETOOTH_CONNECT is self-granted via
+         DevicePolicyManager on device-owner phones (OwnerSetup.provision); on
+         the accessibility-tier fallback it needs the normal runtime prompt. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Same reasoning for Wi-Fi: the quick-settings tile is unreachable under
+         lock task. setWifiEnabled is a no-op for ordinary apps since API 29;
+         device owner is a documented exemption. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- DevicePolicyManager validates the Private DNS server from this process. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application
+        android:label="${appLabel}"
+        android:name=".FocusBroApp"
+        android:icon="@mipmap/ic_focusbro"
+        android:roundIcon="@mipmap/ic_focusbro">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <!-- Specifies an Android theme to apply to this Activity as soon as
+                 the Android process has started. This theme is visible to the user
+                 while the Flutter UI initializes. After that, this theme continues
+                 to determine the Window background behind the Flutter UI. -->
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <!-- Don't delete the meta-data below.
+             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <service
+            android:name=".enforce.BlockerAccessibilityService"
+            android:exported="false"
+            android:label="FocusBro"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service" />
+        </service>
+
+        <service android:name=".applimits.AppLimitService"
+            android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Measures foreground usage for user-selected daily app budgets and enforces individual app locks until their saved deadline." />
+        </service>
+        <receiver android:name=".applimits.AppLimitReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.USER_UNLOCKED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".session.SessionService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Runs the countdown for a user-initiated focus lock. The session must survive screen-off and app dismissal until its timer expires." />
+        </service>
+
+        <!-- Night Guard on the tiers without package suspension: hosts the
+             foreground watcher from 21:00 to 06:00 (§24.6). -->
+        <service
+            android:name=".night.NightGuardService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps Night Guard enforcement alive overnight on devices without device owner." />
+        </service>
+
+        <!-- Native timetable alarm and clock/permission reconciliation. -->
+        <receiver
+            android:name=".session.RoutineReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".owner.ProbeReceiver"
+            android:exported="false" />
+
+        <!-- The 22:30/06:00 tethering boundary alarm, plus clock and zone
+             changes. Was never declared before revision 11, so the alarm had
+             nowhere to land and only boot/launch reconcile ran (§24.7). -->
+        <receiver
+            android:name=".owner.TetherReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Night Guard's 21:00/06:00 boundary alarm and clock/zone changes. -->
+        <receiver
+            android:name=".night.NightGuardReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.DATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Package events. Only FULLY_REMOVED reaches a manifest receiver on
+             API 26+; the rest are registered at runtime by the VPN service,
+             which is the component that is always alive. -->
+        <receiver
+            android:name=".protection.PackageEventReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PACKAGE_FULLY_REMOVED" />
+                <action android:name="android.intent.action.PACKAGE_ADDED" />
+                <action android:name="android.intent.action.PACKAGE_REPLACED" />
+                <data android:scheme="package" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".session.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+            <!-- An app update also stops the service; resume rather than let an
+                 update end a running session. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Device owner component. Bound by:
+             adb shell dpm set-device-owner \
+               com.cybersight.hyperfocus.appblocker/.owner.OwnerReceiver -->
+        <receiver
+            android:name=".owner.OwnerReceiver"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+    <!-- Required to query activities that can process text, see:
+         https://developer.android.com/training/package-visibility and
+         https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
+
+         In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
+    <!-- Package visibility (API 30+). Scoped to exactly the six emergency dock
+         slots — QUERY_ALL_PACKAGES is not requested, and is not needed until the
+         app picker lands. -->
+    <queries>
+        <!-- Resolve the actual launcher for the brief illustrated block notice. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN"/>
+            <category android:name="android.intent.category.LAUNCHER"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL"/>
+            <data android:scheme="tel"/>
+        </intent>
+        <!-- A phone's incoming call UI can live outside its keypad package. -->
+        <intent>
+            <action android:name="android.telecom.InCallService"/>
+        </intent>
+        <package android:name="com.android.phone"/>
+        <package android:name="com.android.server.telecom"/>
+        <package android:name="com.android.emergency"/>
+        <package android:name="com.android.incallui"/>
+        <package android:name="com.samsung.android.incallui"/>
+        <package android:name="com.samsung.android.app.telephonyui"/>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:mimeType="vnd.android.cursor.dir/contact"/>
+        </intent>
+        <intent>
+            <action android:name="android.media.action.STILL_IMAGE_CAMERA"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SHOW_ALARMS"/>
+        </intent>
+        <!-- Music-player apps for MusicApps.kt, on the accessibility tier
+             (device owner is exempt from this filtering already). -->
+        <intent>
+            <action android:name="android.intent.action.MAIN"/>
+            <category android:name="android.intent.category.APP_MUSIC"/>
+        </intent>
+        <!-- Night Guard browser discovery (§24.6): apps that handle web URLs
+             and apps that declare the browser category. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <category android:name="android.intent.category.BROWSABLE"/>
+            <data android:scheme="https"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN"/>
+            <category android:name="android.intent.category.APP_BROWSER"/>
+        </intent>
+        <!-- VPN bypass detection: anything declaring a VpnService. -->
+        <intent>
+            <action android:name="android.net.VpnService"/>
+        </intent>
+        <!-- Install-package resolution for the never-suspend list. -->
+        <intent>
+            <action android:name="android.intent.action.INSTALL_PACKAGE"/>
+        </intent>
+        <!-- Named night packages and the known VPN client, for installed checks. -->
+        <package android:name="com.reddit.frontpage"/>
+        <package android:name="org.telegram.messenger"/>
+        <package android:name="com.nordvpn.android"/>
+        <!-- Root authorization UI in the optional connectivity testing build. -->
+        <package android:name="com.topjohnwu.magisk"/>
+    </queries>
+</manifest>

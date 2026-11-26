@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_description">Lets FocusBro see which app just came to the foreground, so it can send you back home when a session is running and you open something you have blocked. It reads the app name only — it cannot see your screen, what you type, or what you send. Outside a session it does one thing: from 21:00 to 06:00 it sends you home from browsers, Reddit and Telegram (Night Guard).</string>
+</resources>
